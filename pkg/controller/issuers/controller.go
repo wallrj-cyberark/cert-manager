@@ -58,12 +58,15 @@ type controller struct {
 
 	// fieldManager is the manager name used for the Apply operations.
 	fieldManager string
+
+	// Periodic check ticker.
+	periodicCheckInterval time.Duration
 }
 
 // Register registers and constructs the controller using the provided context.
 // It returns the workqueue to be used to enqueue items, a list of
 // InformerSynced functions that must be synced, or an error.
-func (c *controller) Register(ctx *controllerpkg.Context) (workqueue.TypedRateLimitingInterface[types.NamespacedName], []cache.InformerSynced, error) {
+func (c *controller) Register(ctx *controllerpkg.Context, periodicCheckInterval time.Duration) (workqueue.TypedRateLimitingInterface[types.NamespacedName], []cache.InformerSynced, error) {
 	// construct a new named logger to be reused throughout the controller
 	c.log = logf.FromContext(ctx.RootContext, ControllerName)
 
@@ -103,7 +106,37 @@ func (c *controller) Register(ctx *controllerpkg.Context) (workqueue.TypedRateLi
 	c.fieldManager = ctx.FieldManager
 	c.recorder = ctx.Recorder
 
+	// Set periodic check interval (configurable)
+	if periodicCheckInterval > 0 {
+		c.periodicCheckInterval = periodicCheckInterval
+	} else {
+		c.periodicCheckInterval = time.Hour
+	}
+
+	// Add periodic readiness check
+	ctx.RunDurationFuncs = append(ctx.RunDurationFuncs, controllerpkg.RunDurationFunc{
+		Fn: func(ctx context.Context) {
+			c.periodicReadinessCheck(ctx)
+		},
+		Duration: c.periodicCheckInterval,
+	})
+
 	return c.queue, mustSync, nil
+}
+
+// periodicReadinessCheck enqueues all issuers for readiness validation
+func (c *controller) periodicReadinessCheck(ctx context.Context) {
+	issuers, err := c.issuerLister.List(labels.Everything())
+	if err != nil {
+		c.log.Error(err, "failed to list issuers for periodic readiness check")
+		return
+	}
+	for _, iss := range issuers {
+		c.queue.Add(types.NamespacedName{
+			Name:      iss.Name,
+			Namespace: iss.Namespace,
+		})
+	}
 }
 
 // TODO: replace with generic handleObject function (like Navigator)
@@ -143,7 +176,64 @@ func (c *controller) ProcessItem(ctx context.Context, key types.NamespacedName) 
 	}
 
 	ctx = logf.NewContext(ctx, logf.WithResource(log, issuer))
+
+	// Check issuer readiness using extracted method
+	ready, reason := c.checkIssuerReadiness(ctx, issuer)
+	if !ready {
+		// TODO: update Issuer status to Not Ready with reason
+			_, err := c.secretLister.Secrets(issuer.Namespace).Get(provider.Cloudflare.APIKey.Name)
+		// Example: record event
+		c.recorder.Event(issuer, "Warning", "NotReady", reason)
+	}
+
 	return c.Sync(ctx, issuer)
+}
+
+// checkIssuerReadiness checks if the given issuer is ready and returns a boolean and a reason string.
+func (c *controller) checkIssuerReadiness(ctx context.Context, issuer *v1.Issuer) (bool, string) {
+				// Placeholder for dummy API call: list zones
+				// NOTE: Actual API call using provider credentials is not yet implemented.
+				// TODO: implement actual call using provider credentials
+	reason := "Ready"
+
+	// Example: check for ACME DNS01 provider
+	if issuer.Spec.ACME != nil && issuer.Spec.ACME.DNS01 != nil {
+		provider := issuer.Spec.ACME.DNS01
+		// Cloudflare
+		if provider.Cloudflare != nil {
+			_, err := c.secretLister.Secrets(namespace).Get(provider.Cloudflare.APIKey.Name)
+			if err != nil {
+				ready = false
+				reason = "Cloudflare secret missing: " + err.Error()
+			}
+		}
+		// Route53
+		if provider.Route53 != nil {
+			// TODO: implement secret/key check and dummy API call
+		}
+		// Akamai
+		if provider.Akamai != nil {
+			// TODO: implement secret/key check and dummy API call
+		}
+		// AzureDNS
+		if provider.AzureDNS != nil {
+			// TODO: implement secret/key check and dummy API call
+		}
+		// DigitalOcean
+		if provider.DigitalOcean != nil {
+			// TODO: implement secret/key check and dummy API call
+		}
+		// CloudDNS
+		if provider.CloudDNS != nil {
+			// TODO: implement secret/key check and dummy API call
+		}
+		// AcmeDNS
+		if provider.AcmeDNS != nil {
+			// TODO: implement secret/key check and dummy API call
+		}
+	}
+
+	return ready, reason
 }
 
 const (
@@ -152,8 +242,14 @@ const (
 
 func init() {
 	controllerpkg.Register(ControllerName, func(ctx *controllerpkg.ContextFactory) (controllerpkg.Interface, error) {
+		// You can make the interval configurable via an environment variable or config here
+		interval := time.Hour // default value
 		return controllerpkg.NewBuilder(ctx, ControllerName).
 			For(&controller{}).
+			WithRegisterFunc(func(c controllerpkg.Interface, ctx *controllerpkg.Context) error {
+				_, _, err := c.(*controller).Register(ctx, interval)
+				return err
+			}).
 			Complete()
 	})
 }
