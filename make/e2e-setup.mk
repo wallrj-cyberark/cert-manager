@@ -486,7 +486,6 @@ e2e-setup-samplewebhook: load-$(call local-image-tar,samplewebhook) e2e-setup-ce
 e2e-setup-projectcontour: $(call image-tar,projectcontour) load-$(call image-tar,projectcontour) $(call image-tar,projectcontourenvoy) load-$(call image-tar,projectcontourenvoy) make/config/projectcontour/gateway.yaml make/config/projectcontour/contour.yaml $(bin_dir)/scratch/kind-exists | $(NEEDS_HELM) $(NEEDS_KUBECTL)
 	@$(eval CONTOUR_TAG=$(shell tar xfO $< manifest.json | jq '.[0].RepoTags[0]' -r | cut -d: -f2))
 	@$(eval ENVOY_TAG=$(shell tar xfO $(call image-tar,projectcontourenvoy) manifest.json | jq '.[0].RepoTags[0]' -r | cut -d: -f2))
-	$(HELM) repo add bitnami --force-update https://charts.bitnami.com/bitnami >/dev/null
 	# Warning: When upgrading the version of this helm chart, bear in mind that the IMAGE_projectcontour_* images above might need to be updated, too.
 	# Each helm chart version in the bitnami repo corresponds to an underlying application version. Check application versions and chart versions with:
 	# $$ helm search repo bitnami -l | grep -E "contour[^-]"
@@ -496,6 +495,7 @@ e2e-setup-projectcontour: $(call image-tar,projectcontour) load-$(call image-tar
 	# registry as a stop gap measure until we can move to a different chart. See:
 	# https://github.com/bitnami/charts/blob/main/bitnami/contour/README.md#%EF%B8%8F-important-notice-upcoming-changes-to-the-bitnami-catalog
 	$(HELM) upgrade \
+		--repo https://projectcontour.github.io/helm-charts/ \
 		--install \
 		--wait \
 		--version 18.2.4 \
@@ -517,7 +517,7 @@ e2e-setup-projectcontour: $(call image-tar,projectcontour) load-$(call image-tar
 		--set envoy.image.tag=$(ENVOY_TAG) \
 		--set envoy.image.pullPolicy=Never \
 		--set-file configInline=make/config/projectcontour/contour.yaml \
-		projectcontour bitnami/contour >/dev/null
+		contour >/dev/null
 	$(KUBECTL) apply --server-side -f make/config/projectcontour/gateway.yaml
 
 .PHONY: e2e-setup-sampleexternalissuer
